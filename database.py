@@ -1,31 +1,3 @@
-import sqlite3
-import hashlib
-import os
-
-# REVISI: Disesuaikan langsung ke nama file lokal root untuk kompabilitas cloud hosting
-DB_NAME = "moniva.db"
-
-PERSENTASE_GAJI = 0.175
-
-MASTER_BARANG = {
-    "Mie": 2000,
-    "Pangsit Mekar": 2000,
-    "Tahu": 2000,
-    "Siomay": 2000,
-    "Bakso Halus": 1500,
-    "Bakso Urat": 3000,
-    "Bakso Cincang": 6000,
-}
-
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-def get_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
@@ -101,129 +73,24 @@ def init_db():
     """)
     conn.commit()
 
-    # Cek Seed data dummy
+    # Cek & Seed data user berdasarkan database terbaru
     cur.execute("SELECT COUNT(*) AS total FROM tb_user")
     if cur.fetchone()["total"] == 0:
         pertanyaan_default = "Apa nama hewan peliharaan favorit Anda?"
+        
+        # Data User sesuai tabel request
+        data_user = [
+            ("davahaidar", hash_password("1933"), "Dava Haidar", "Pemilik", pertanyaan_default, hash_password("kucing")),
+            ("budi_karyawan", hash_password("budi123"), "Budi", "Karyawan", pertanyaan_default, hash_password("budi")),
+            ("siti_karyawan", hash_password("siti123"), "Siti", "Karyawan", pertanyaan_default, hash_password("siti")),
+            ("joko_karyawan", hash_password("joko123"), "Joko", "Karyawan", pertanyaan_default, hash_password("joko")),
+            ("rina_karyawan", hash_password("rina123"), "Rina", "Karyawan", pertanyaan_default, hash_password("rina")),
+            ("agus_karyawan", hash_password("agus123"), "Agus", "Karyawan", pertanyaan_default, hash_password("agus"))
+        ]
+        
         cur.executemany(
             """INSERT INTO tb_user (username, password, nama, role, pertanyaan_keamanan, jawaban_keamanan) VALUES (?, ?, ?, ?, ?, ?)""",
-            [
-                ("davahaidar", hash_password("1933"), "Dava (Pemilik)", "Pemilik", pertanyaan_default, hash_password("kucing")),
-                ("budi_karyawan", hash_password("budi123"), "Budi Santoso", "Karyawan", pertanyaan_default, hash_password("rocky")),
-                ("siti_karyawan", hash_password("siti123"), "Siti Aminah", "Karyawan", pertanyaan_default, hash_password("milo")),
-            ]
+            data_user
         )
         conn.commit()
     conn.close()
-
-def verifikasi_login(username: str, password: str):
-    conn = get_connection()
-    user = conn.execute("SELECT * FROM tb_user WHERE username = ? AND password = ?", (username, hash_password(password))).fetchone()
-    conn.close()
-    return user
-
-def ambil_pertanyaan_keamanan(username: str):
-    conn = get_connection()
-    user = conn.execute("SELECT pertanyaan_keamanan FROM tb_user WHERE username = ?", (username,)).fetchone()
-    conn.close()
-    return user["pertanyaan_keamanan"] if user else None
-
-def verifikasi_jawaban_keamanan(username: str, jawaban: str) -> bool:
-    conn = get_connection()
-    user = conn.execute("SELECT jawaban_keamanan FROM tb_user WHERE username = ?", (username,)).fetchone()
-    conn.close()
-    return user["jawaban_keamanan"] == hash_password(jawaban.strip().lower()) if user else False
-
-def reset_password_via_keamanan(username: str, jawaban: str, password_baru: str) -> bool:
-    if not verifikasi_jawaban_keamanan(username, jawaban): return False
-    conn = get_connection()
-    conn.execute("UPDATE tb_user SET password = ? WHERE username = ?", (hash_password(password_baru), username))
-    conn.commit()
-    conn.close()
-    return True
-
-def ubah_password(id_user: int, password_lama: str, password_baru: str) -> bool:
-    conn = get_connection()
-    user = conn.execute("SELECT password FROM tb_user WHERE id_user = ?", (id_user,)).fetchone()
-    if user is None or user["password"] != hash_password(password_lama):
-        conn.close()
-        return False
-    conn.execute("UPDATE tb_user SET password = ? WHERE id_user = ?", (hash_password(password_baru), id_user))
-    conn.commit()
-    conn.close()
-    return True
-
-def tambah_barang_bawaan_multi(tgl_catat: str, id_user: int, daftar_barang: list, id_user_pencatat: int):
-    conn = get_connection()
-    total_omset_sesi = 0.0
-    id_barang_pertama = None
-
-    for barang in daftar_barang:
-        conn.execute(
-            """INSERT INTO tb_barang_bawaan (tgl_catat, id_user, nama_barang, harga_satuan, jumlah_dibawa, jumlah_terjual, jumlah_kembali, nilai_omset, id_user_pencatat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (tgl_catat, id_user, barang["nama_barang"], barang["harga_satuan"], barang["jumlah_dibawa"], barang["jumlah_terjual"], barang["jumlah_kembali"], barang["nilai_omset"], id_user_pencatat)
-        )
-        id_baru = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-        if id_barang_pertama is None: id_barang_pertama = id_baru
-        total_omset_sesi += barang["nilai_omset"]
-
-    jumlah_gaji = total_omset_sesi * PERSENTASE_GAJI
-    conn.execute("""INSERT INTO tb_gaji_harian (id_user, id_barang, tgl_gaji, total_omset, jumlah_gaji) VALUES (?, ?, ?, ?, ?)""", (id_user, id_barang_pertama, tgl_catat, total_omset_sesi, jumlah_gaji))
-    conn.commit()
-    conn.close()
-
-def ambil_barang_by_user(id_user: int):
-    conn = get_connection()
-    rows = conn.execute("SELECT * FROM tb_barang_bawaan WHERE id_user = ? ORDER BY tgl_catat DESC", (id_user,)).fetchall()
-    conn.close()
-    return rows
-
-def ambil_semua_barang_bawaan():
-    conn = get_connection()
-    rows = conn.execute("""SELECT b.*, u.nama AS nama_karyawan FROM tb_barang_bawaan b JOIN tb_user u ON b.id_user = u.id_user ORDER BY b.tgl_catat DESC""").fetchall()
-    conn.close()
-    return rows
-
-def ambil_daftar_karyawan():
-    conn = get_connection()
-    rows = conn.execute("SELECT id_user, nama, username FROM tb_user WHERE role = 'Karyawan' ORDER BY nama ASC").fetchall()
-    conn.close()
-    return rows
-
-def ambil_gaji_by_user(id_user: int):
-    conn = get_connection()
-    rows = conn.execute("SELECT * FROM tb_gaji_harian WHERE id_user = ? ORDER BY tgl_gaji DESC", (id_user,)).fetchall()
-    conn.close()
-    return rows
-
-def tambah_pengeluaran(tgl_pengeluaran: str, kategori_biaya: str, nama_item: str, nominal_biaya: float, foto_nota: str, id_user: int):
-    conn = get_connection()
-    conn.execute("""INSERT INTO tb_pengeluaran (tgl_pengeluaran, kategori_biaya, nama_item, nominal_biaya, foto_nota, id_user) VALUES (?, ?, ?, ?, ?, ?)""", (tgl_pengeluaran, kategori_biaya, nama_item, nominal_biaya, foto_nota, id_user))
-    conn.commit()
-    conn.close()
-
-def ambil_semua_pengeluaran():
-    conn = get_connection()
-    rows = conn.execute("SELECT * FROM tb_pengeluaran ORDER BY tgl_pengeluaran DESC").fetchall()
-    conn.close()
-    return rows
-
-def rekap_omset_per_tanggal():
-    conn = get_connection()
-    rows = conn.execute("SELECT tgl_catat AS tanggal, SUM(nilai_omset) AS total FROM tb_barang_bawaan GROUP BY tgl_catat ORDER BY tgl_catat ASC").fetchall()
-    conn.close()
-    return [(r["tanggal"], r["total"]) for r in rows]
-
-def rekap_pengeluaran_per_tanggal():
-    conn = get_connection()
-    rows = conn.execute("SELECT tgl_pengeluaran AS tanggal, SUM(nominal_biaya) AS total FROM tb_pengeluaran GROUP BY tgl_pengeluaran ORDER BY tgl_pengeluaran ASC").fetchall()
-    conn.close()
-    return [(r["tanggal"], r["total"]) for r in rows]
-
-def rekap_laba_rugi_bulan(bulan: str):
-    conn = get_connection()
-    total_pendapatan = conn.execute("SELECT COALESCE(SUM(nilai_omset), 0) AS total FROM tb_barang_bawaan WHERE tgl_catat LIKE ?", (f"{bulan}%",)).fetchone()["total"]
-    total_pengeluaran = conn.execute("SELECT COALESCE(SUM(nominal_biaya), 0) AS total FROM tb_pengeluaran WHERE tgl_pengeluaran LIKE ?", (f"{bulan}%",)).fetchone()["total"]
-    total_gaji = conn.execute("SELECT COALESCE(SUM(jumlah_gaji), 0) AS total FROM tb_gaji_harian WHERE tgl_gaji LIKE ?", (f"{bulan}%",)).fetchone()["total"]
-    conn.close()
-    return {"bulan": bulan, "total_pendapatan": total_pendapatan, "total_pengeluaran": total_pengeluaran, "total_gaji": total_gaji, "laba_bersih": total_pendapatan - total_pengeluaran - total_gaji}
